@@ -843,6 +843,10 @@ struct mg_connection {
 #if defined(USE_LUA) && defined(USE_WEBSOCKET)
     void * lua_websocket_state;     /* Lua_State for a websocket connection */
 #endif
+#if defined(REVERSE)
+    char *buf_r;
+    int buf_size_r;
+#endif
     int is_chunked;                 /* transfer-encoding is chunked; 2=and consumed */
 };
 
@@ -6663,13 +6667,21 @@ static void *worker_thread_run(void *thread_func_param)
     tls.pthread_cond_helper_mutex = CreateEvent(NULL, FALSE, FALSE, NULL);
 #endif
 
+#if defined(REVERSE)
+    conn = (struct mg_connection *) mg_calloc(1, sizeof(*conn) + MAX_REQUEST_SIZE * 2);
+#else
     conn = (struct mg_connection *) mg_calloc(1, sizeof(*conn) + MAX_REQUEST_SIZE);
+#endif
     if (conn == NULL) {
         mg_cry(fc(ctx), "%s", "Cannot create new connection struct, OOM");
     } else {
         pthread_setspecific(sTlsKey, &tls);
         conn->buf_size = MAX_REQUEST_SIZE;
         conn->buf = (char *) (conn + 1);
+#if defined(REVERSE)
+        conn->buf_r = (char *) (conn + 1) + MAX_REQUEST_SIZE;
+        conn->buf_size_r = MAX_REQUEST_SIZE;
+#endif
         conn->ctx = ctx;
         conn->request_info.user_data = ctx->user_data;
         /* Allocate a mutex for this connection to allow communication both
