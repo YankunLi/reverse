@@ -6497,6 +6497,9 @@ static int getreq(struct mg_connection *conn, char *ebuf, size_t ebuf_len, int *
     conn->request_len = read_request(NULL, conn, conn->buf, conn->buf_size,
                                      &conn->data_len);
     assert(conn->request_len < 0 || conn->data_len >= conn->request_len);
+#if defined(REVERSE)
+    memcpy(conn->buf_r, conn->buf, conn->data_len);
+#endif
 
     if (conn->request_len == 0 && conn->data_len == conn->buf_size) {
         snprintf(ebuf, ebuf_len, "%s", "Request Too Large");
