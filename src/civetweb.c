@@ -844,6 +844,7 @@ struct mg_connection {
     void * lua_websocket_state;     /* Lua_State for a websocket connection */
 #endif
 #if defined(REVERSE)
+    struct socket server;
     char *buf_r;
     int buf_size_r;
 #endif
@@ -6412,6 +6413,13 @@ static void close_connection(struct mg_connection *conn)
         conn->ssl = NULL;
     }
 #endif
+#if defined(REVERSE)
+    if (conn->client.sock != INVALID_SOCKET) {
+        shutdown(conn->server.sock, SHUT_RDWR);
+        closesocket(conn->server.sock);
+        conn->server.sock = INVALID_SOCKET;
+    }
+#endif
     if (conn->client.sock != INVALID_SOCKET) {
         close_socket_gracefully(conn);
         conn->client.sock = INVALID_SOCKET;
@@ -6682,7 +6690,7 @@ static void *worker_thread_run(void *thread_func_param)
         conn->buf_size = MAX_REQUEST_SIZE;
         conn->buf = (char *) (conn + 1);
 #if defined(REVERSE)
-        conn->buf_r = (char *) (conn + 1) + MAX_REQUEST_SIZE;
+        conn->buf_r = ((char *) (conn + 1)) + MAX_REQUEST_SIZE;
         conn->buf_size_r = MAX_REQUEST_SIZE;
 #endif
         conn->ctx = ctx;
@@ -6706,6 +6714,17 @@ static void *worker_thread_run(void *thread_func_param)
                    &conn->client.rsa.sin.sin_addr.s_addr, 4);
             conn->request_info.remote_ip = ntohl(conn->request_info.remote_ip);
             conn->request_info.is_ssl = conn->client.is_ssl;
+#if defined(REVERSE)
+            conn->server.rsa.sin.sin_family = AF_INET;
+            conn->server.rsa.sin.sin_port = htons("7480");
+            if (inet_pton(AF_INET, "****", &conn->server.rsa.sin.sin_addr) <= 0) {
+                break; //send error 5**
+            }
+            if ((conn->server.sock = socket(AF_INET, SOCK_STREAM, 0)) < 0 ||
+                (connect(conn->server.sock, (struct sockaddr*)&conn->server.rsa.sin, sizeof(conn->server.rsa.sin) < 0))){
+                break; //send error 5**
+            }
+#endif
 
             if (!conn->client.is_ssl
 #ifndef NO_SSL
