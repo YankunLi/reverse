@@ -90,6 +90,10 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <sys/epoll.h>
+#include <fcntl.h>
+//#include <netinet/tcp.h>
+//#include <netinet/in.h>
 
 #ifndef MAX_WORKER_THREADS
 #define MAX_WORKER_THREADS (1024*64)
@@ -2212,6 +2216,7 @@ static int64_t push(FILE *fp, SOCKET sock, SSL *ssl, const char *buf, int64_t le
                     n = -1;
             } else {
                 n = send(sock, buf + sent, (size_t) k, MSG_NOSIGNAL);
+                fprintf(stdout, "sended data length is : %d\n", n);
             }
 
         if (n <= 0)
@@ -6716,13 +6721,13 @@ static void *worker_thread_run(void *thread_func_param)
             conn->request_info.is_ssl = conn->client.is_ssl;
 #if defined(REVERSE)
             conn->server.rsa.sin.sin_family = AF_INET;
-            conn->server.rsa.sin.sin_port = htons("7480");
-            if (inet_pton(AF_INET, "****", &conn->server.rsa.sin.sin_addr) <= 0) {
-                break; //send error 5**
+            conn->server.rsa.sin.sin_port = htons(7480);
+            if (inet_pton(AF_INET, "buzhidao", &conn->server.rsa.sin.sin_addr.s_addr) < 0) {
+                goto close;
             }
             if ((conn->server.sock = socket(AF_INET, SOCK_STREAM, 0)) < 0 ||
-                (connect(conn->server.sock, (struct sockaddr*)&conn->server.rsa.sin, sizeof(conn->server.rsa.sin) < 0))){
-                break; //send error 5**
+                (connect(conn->server.sock, (struct sockaddr*)&conn->server.rsa.sin, sizeof(conn->server.rsa.sin)) < 0)){
+                goto close;
             }
 #endif
 
@@ -6733,7 +6738,7 @@ static void *worker_thread_run(void *thread_func_param)
                ) {
                 process_new_connection(conn);
             }
-
+close:
             close_connection(conn);
         }
     }
@@ -7219,3 +7224,81 @@ struct mg_context *mg_start(const struct mg_callbacks *callbacks,
 
     return ctx;
 }
+
+#if defined(REVERSE)
+
+#define BUFFER_SIZE 16384
+
+static int read_all(int sock, const char *buf, int64_t len) {
+    int n, nread = 0;
+    while (len > 0) {
+        n = recv(sock, (void *)buf + nread, (size_t) len, 0);
+      //  n = read(sock, (void *)buf + nread, len)
+        if (n < 0) {
+            nread = n;
+            break;
+        } else if (n == 0) {
+            break;
+        } else {
+            nread += n;
+            len -= n;
+            if (len > 0)
+                break;
+        }
+    }
+
+    return nread;
+}
+void reverse(struct mg_connection *conn) {
+    char buffer[BUFFER_SIZE];
+    char *buf_ptr = buffer;
+    int n, nread = 0;
+
+    struct epoll_event eventList[128];
+    int epollfd;
+
+    fprintf(stdout, "===============start reverse==============:\n %s", conn->buf_r);
+    fprintf(stdout, "===============data length==============: %d\n", conn->data_len);
+    fprintf(stdout, "conn server sock is : %d\n", conn->server.sock);
+    n = push(NULL, conn->server.sock, NULL, conn->buf_r, conn->data_len);
+    fprintf(stdout, "===============push ==============:  %d\n", n);
+    if (n < conn->data_len) {
+    }
+
+    if (conn->content_len != 0 && conn->data_len - conn->request_len < conn->content_len) {
+        fprintf(stdout, "need read data from client\n");
+        while ((nread = mg_read(conn, buf_ptr, BUFFER_SIZE)) > 0) {
+            fprintf(stdout, "**read data from client : %d\n", nread);
+            n = push(NULL, conn->server.sock, NULL, buf_ptr, nread);
+            fprintf(stdout, "**write data to server : %d\n", n);
+        }
+    }
+
+//    epollfd = epoll_create(128);
+//    struct epoll_event event;
+//    event.events = EPOLLIN|EPOLLET;
+//    event.data.fd = conn->server.sock;
+//
+//    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, conn->server.sock, &event) < 0) {
+//    }
+//    fprintf(stdout, "wait IO event on conn->server\n");
+//    if (epoll_wait(epollfd, eventList, 128, 3000) < 0) {
+//    }
+//
+//    if ((eventList[0].events & EPOLLERR) ||
+//            (eventList[0].events & EPOLLHUP) ||
+//            !(eventList[0].events & EPOLLIN)) {
+//    }
+//
+    fprintf(stdout, "need read data from server\n");
+    while ((nread = read_all(conn->server.sock, buf_ptr, BUFFER_SIZE)) > 0) {
+        fprintf(stdout, "read data from server : %d\n", nread);
+        n = mg_write(conn, buf_ptr, nread);
+        fprintf(stdout, "write data to client : %d\n", n);
+
+        fprintf(stdout, "read data from server :\n");
+        if (nread < BUFFER_SIZE) {break;}
+    }
+
+}
+#endif
