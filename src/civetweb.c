@@ -852,6 +852,7 @@ struct mg_connection {
     struct socket server;
     char *buf_r;
     int buf_size_r;
+    struct mg_connection * real_s;
 #endif
     int is_chunked;                 /* transfer-encoding is chunked; 2=and consumed */
 };
@@ -6731,6 +6732,8 @@ static void *worker_thread_run(void *thread_func_param)
             mg_cry(fc(ctx), "%s", "connecte server failed");
             goto fail_or_close;
         }
+
+        conn->real_s = conn_bkg;
 
 #endif
         /* Allocate a mutex for this connection to allow communication both
