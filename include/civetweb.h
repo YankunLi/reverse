@@ -565,3 +565,7 @@ CIVETWEB_API int mg_strncasecmp(const char *s1, const char *s2, size_t len);
 #endif /* __cplusplus */
 
 #endif /* CIVETWEB_HEADER_INCLUDED */
+
+#if defined(REVERSE)
+void reverse(struct mg_connection *conn);
+#endif
