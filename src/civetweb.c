@@ -94,6 +94,7 @@
 #include <fcntl.h>
 //#include <netinet/tcp.h>
 //#include <netinet/in.h>
+#include <errno.h>
 
 #ifndef MAX_WORKER_THREADS
 #define MAX_WORKER_THREADS (1024*64)
@@ -6684,14 +6685,21 @@ static void *worker_thread_run(void *thread_func_param)
 #endif
 
 #if defined(REVERSE)
+    //conn is for client; conn_backgrd is for background server;
     conn = (struct mg_connection *) mg_calloc(1, sizeof(*conn) + MAX_REQUEST_SIZE * 2);
+    conn_bkg = (struct mg_connection *) mg_calloc(1, sizeof(*conn) + MAX_REQUEST_SIZE * 2);
 #else
     conn = (struct mg_connection *) mg_calloc(1, sizeof(*conn) + MAX_REQUEST_SIZE);
 #endif
-    if (conn == NULL) {
+    if (conn == NULL
+#if defined(REVERSE)
+            || conn_bkg == NULL
+#endif
+            ) {
         mg_cry(fc(ctx), "%s", "Cannot create new connection struct, OOM");
     } else {
         pthread_setspecific(sTlsKey, &tls);
+        //initiate conn for client
         conn->buf_size = MAX_REQUEST_SIZE;
         conn->buf = (char *) (conn + 1);
 #if defined(REVERSE)
@@ -6700,6 +6708,31 @@ static void *worker_thread_run(void *thread_func_param)
 #endif
         conn->ctx = ctx;
         conn->request_info.user_data = ctx->user_data;
+        //initiate conn_bkg
+#if defined(REVERSE)
+        conn_bkg->buf_size = MAX_REQUEST_SIZE;
+        conn_bkg->buf = (char *) (conn_bkg + 1);
+        conn_bkg->buf_r = ((char *) (conn_bkg + 1)) + MAX_REQUEST_SIZE;
+        conn_bkg->buf_size_r = MAX_REQUEST_SIZE;
+        conn_bkg->ctx = ctx;
+        conn_bkg->request_info.user_data = ctx->user_data;
+
+        conn_bkg->request_info.remote_port = 7480;
+        conn_bkg->request_info.remote_ip = "127.0.0.1";
+        conn_bkg->client.rsa.sin.sin_family = AF_INET;
+        conn_bkg->client.rsa.sin.sin_port = htons(conn_bkg->request_info.remote_port);
+        if (inet_pton(AF_INET, conn_bkg->request_info.remote_ip, &conn_bkg->client.rsa.sin.sin_addr) < 0) {
+            mg_cry(fc(ctx), "%s", "inet_pton transfor ip failed");
+            goto fail_or_close;
+        } else if ((conn_bkg->client.sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+            mg_cry(fc(ctx), "%s", "create socket failed");
+            goto fail_or_close;
+        } else if (connect(conn->client.sock, (struct sockaddr*)&conn->client.rsa.sin, sizeof(conn->client.rsa.sin)) < 0) {
+            mg_cry(fc(ctx), "%s", "connecte server failed");
+            goto fail_or_close;
+        }
+
+#endif
         /* Allocate a mutex for this connection to allow communication both
            within the request handler and from elsewhere in the application */
         (void) pthread_mutex_init(&conn->mutex, NULL);
@@ -6719,17 +6752,17 @@ static void *worker_thread_run(void *thread_func_param)
                    &conn->client.rsa.sin.sin_addr.s_addr, 4);
             conn->request_info.remote_ip = ntohl(conn->request_info.remote_ip);
             conn->request_info.is_ssl = conn->client.is_ssl;
-#if defined(REVERSE)
-            conn->server.rsa.sin.sin_family = AF_INET;
-            conn->server.rsa.sin.sin_port = htons(7480);
-            if (inet_pton(AF_INET, "buzhidao", &conn->server.rsa.sin.sin_addr.s_addr) < 0) {
-                goto close;
-            }
-            if ((conn->server.sock = socket(AF_INET, SOCK_STREAM, 0)) < 0 ||
-                (connect(conn->server.sock, (struct sockaddr*)&conn->server.rsa.sin, sizeof(conn->server.rsa.sin)) < 0)){
-                goto close;
-            }
-#endif
+//#if defined(REVERSE)
+//            conn->server.rsa.sin.sin_family = AF_INET;
+//            conn->server.rsa.sin.sin_port = htons(7480);
+//            if (inet_pton(AF_INET, "buzhidao", &conn->server.rsa.sin.sin_addr.s_addr) < 0) {
+//                goto close;
+//            }
+//            if ((conn->server.sock = socket(AF_INET, SOCK_STREAM, 0)) < 0 ||
+//                (connect(conn->server.sock, (struct sockaddr*)&conn->server.rsa.sin, sizeof(conn->server.rsa.sin)) < 0)){
+//                goto close;
+//            }
+//#endif
 
             if (!conn->client.is_ssl
 #ifndef NO_SSL
@@ -6742,7 +6775,9 @@ close:
             close_connection(conn);
         }
     }
-
+#if defined(REVERSE)
+fail_or_close:
+#endif
     /* Signal master that we're done with connection and exiting */
     (void) pthread_mutex_lock(&ctx->thread_mutex);
     ctx->num_threads--;
@@ -7295,9 +7330,16 @@ void reverse(struct mg_connection *conn) {
         fprintf(stdout, "read data from server : %d\n", nread);
         n = mg_write(conn, buf_ptr, nread);
         fprintf(stdout, "write data to client : %d\n", n);
+        if (recv(conn->server.sock, buf_ptr, BUFFER_SIZE, MSG_DONTWAIT) < 0){
+            if (errno == EWOULDBLOCK) {
+                break;
+            } else {
+                return -1;
+            }
+        }
+        fprintf(stdout, "after MSG_PEEK| MSG_DONTWAIT \n");
 
         fprintf(stdout, "read data from server :\n");
-        if (nread < BUFFER_SIZE) {break;}
     }
 
 }
